@@ -3,7 +3,7 @@ Description = Sphero Controller
 Requires = pigpiod.service
 
 [Service]
-ExecStart = python3 /opt/sphero/main.py
+ExecStart = python3 INSTALL_DIR/main.py
 Restart = always
 Type = simple
 User = pi

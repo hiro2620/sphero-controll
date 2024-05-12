@@ -9,6 +9,8 @@ import pigpio
 basicConfig(level=INFO)
 logger = getLogger(__name__)
 
+REMOTE_RASPBERRY_PI_ADDRESS = 'raspi.local' # デバッグ用
+
 BTN_FORWARD_PIN = 20 # 前進
 BTN_BACKWARD_PIN = 26 # 後退
 BTN_CW_ROTATE_PIN = 16 # 上から見て時計回り
@@ -60,8 +62,14 @@ class SpheroState():
 
 
 class InputManager:
-    def __init__(self):
-        self.__pi = pigpio.pi()
+    def __init__(self, remote=False):
+        if remote:
+            self.__pi = pigpio.pi(REMOTE_RASPBERRY_PI_ADDRESS)
+        else:
+            self.__pi = pigpio.pi()
+
+        if not self.__pi.connected:
+            raise ConnectionError('Failed to connect to pigpio daemon')
 
         self.__pi.set_pull_up_down(BTN_FORWARD_PIN, pigpio.PUD_UP)
         self.__pi.set_pull_up_down(BTN_BACKWARD_PIN, pigpio.PUD_UP)
@@ -87,24 +95,6 @@ class InputManager:
     @property
     def btn_dash_pressed(self):
         return not self.__pi.read(BTN_DASH)
-
-
-class FakeInputManager:
-    @property
-    def btn_forward_pressed(self):
-        return False
-
-    @property
-    def btn_backward_pressed(self):
-        return False
-
-    @property
-    def btn_cw_pressed(self):
-        return False
-
-    @property
-    def btn_acw_pressed(self):
-        return False
 
 
 def main():
