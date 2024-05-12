@@ -1,0 +1,12 @@
+[Unit]
+Description = Sphero Controller
+Requires = pigpiod.service
+
+[Service]
+ExecStart = python3 /opt/sphero/main.py
+Restart = always
+Type = simple
+User = pi
+
+[Install]
+WantedBy = multi-user.target

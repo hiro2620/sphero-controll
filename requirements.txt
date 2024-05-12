@@ -1,0 +1,10 @@
+bleak==0.21.1
+numpy==1.26.4
+pigpio==1.78
+pyobjc-core==9.2
+pyobjc-framework-Cocoa==9.2
+pyobjc-framework-CoreBluetooth==9.2
+pyobjc-framework-libdispatch==9.2
+setuptools==69.5.1
+spherov2==0.12.1
+transforms3d==0.4.1
