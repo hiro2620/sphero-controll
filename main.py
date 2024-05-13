@@ -8,6 +8,7 @@ import board
 import busio
 from spherov2 import scanner
 from spherov2.utils import ToyUtil
+from spherov2.scanner import ToyNotFoundError
 import pigpio
 from PIL import ImageFont, Image, ImageDraw
 
@@ -25,7 +26,9 @@ BTN_DASH = 6 # 加速
 
 BASE_SPEED = 80
 MAX_SPEED = 255
-ANGULAR_SPEED = 9
+ANGULAR_SPEED = 12
+
+MAX_INTERVAL = 60
 
 class TimeoutError(BaseException):
     ...
@@ -112,42 +115,60 @@ class DisplayManager:
     WIDTH = 128
     HEIGHT = 64
 
-    PADDING_TOP = 24
-    PADDING_LEFT = 10
+    PADDING_TOP = 20
+    PADDING_LEFT = 0
 
     def __init__(self):
         i2c = busio.I2C(board.SCL, board.SDA)
-        self.__oled = adafruit_ssd1306.SSD1306_I2C(self.WIDTH, self.HEIGHT, i2c, addr=0x3d)
+        self.__oled = adafruit_ssd1306.SSD1306_I2C(self.WIDTH, self.HEIGHT, i2c, addr=0x3c)
+        self.__oled.fill(0)
+        self.__oled.show()
+
+
+    def __del__(self):
         self.__oled.fill(0)
         self.__oled.show()
 
 
     @staticmethod
     def get_undervoltage_state():
-        r = int(subprocess.run(['vcgencmd', 'get_throttled'], stdout=subprocess.PIPE).stdout.decode('utf-8'), 16)
+        r = int(subprocess.run(['vcgencmd', 'get_throttled'], stdout=subprocess.PIPE).stdout.decode('utf-8')[12:-1], 16)
         return r & 0x50000 != 0
 
 
     def __draw_header(self, draw: ImageDraw):
-        draw.rectangle((0, 50, 20, 20), outline=255, fill=255)
+        if self.get_undervoltage_state():
+            draw.rectangle([(108, 0), (124, 10)], width=1, fill=0, outline=255)
+            draw.rectangle([(124, 3), (128, 7)], width=0, fill=255)
+            draw.polygon([(108, 0), (116, 10), (108, 10)], width=0, fill=255)
 
 
-    def display_initializing(self):
+    def display_scanning(self):
         font = ImageFont.load_default()
         image = Image.new("1", (self.WIDTH, self.HEIGHT))
         draw = ImageDraw.Draw(image)
-        draw.text((self.PADDING_LEFT, self.PADDING_TOP), 'Initializing...', font=font, fill=255)
+        draw.text((self.PADDING_LEFT, self.PADDING_TOP), 'Scanning...', font=font, fill=255)
         self.__draw_header(draw)
         self.__oled.image(image)
         self.__oled.show()
 
 
-    def display_running(self, name:str, mac_address:str):
+    def display_running(self, name:str="anonymous sphero", mac_address:str=""):
         font = ImageFont.load_default()
         image = Image.new("1", (self.WIDTH, self.HEIGHT))
         draw = ImageDraw.Draw(image)
-        draw.text((self.PADDING_LEFT, self.PADDING_TOP), 'connected to ' + name, font=font, fill=255)
-        draw.text((self.PADDING_LEFT, self.PADDING_TOP + 36), 'connected to ' + name, font=font, fill=255)
+        draw.text((self.PADDING_LEFT, self.PADDING_TOP), f"Ready [{name}]", font=font, fill=255)
+        draw.text((self.PADDING_LEFT, self.PADDING_TOP + 16), mac_address, font=font, fill=255)
+        self.__draw_header(draw)
+        self.__oled.image(image)
+        self.__oled.show()
+
+
+    def display_not_found(self):
+        font = ImageFont.load_default()
+        image = Image.new("1", (self.WIDTH, self.HEIGHT))
+        draw = ImageDraw.Draw(image)
+        draw.text((self.PADDING_LEFT, self.PADDING_TOP), 'No Sphero found.', font=font, fill=180)
         self.__draw_header(draw)
         self.__oled.image(image)
         self.__oled.show()
@@ -157,7 +178,8 @@ class DisplayManager:
         font = ImageFont.load_default()
         image = Image.new("1", (self.WIDTH, self.HEIGHT))
         draw = ImageDraw.Draw(image)
-        draw.text((0, 0), 'Terminated', font=font, fill=255)
+        draw.text((self.PADDING_LEFT, self.PADDING_TOP), 'Terminated.', font=font, fill=180)
+        draw.text((self.PADDING_LEFT, self.PADDING_TOP + 16), 'Restart in few seconds.', font=font, fill=180)
         self.__draw_header(draw)
         self.__oled.image(image)
         self.__oled.show()
@@ -168,91 +190,99 @@ def main():
     btns = InputManager()
 
     logger.info('Start scanning...')
-    display.display_initializing()
+    display.display_scanning()
 
-    with scanner.find_toy() as toy:
-        logger.info(f'Connected to: {toy}')
-        display.display_running()
+    try:
+        with scanner.find_toy() as toy:
+            logger.info(f'Connected to: {toy}')
+            display.display_running(name=toy.name, mac_address=toy.address)
 
-        toy.wake()
-        ToyUtil.set_robot_state_on_start(toy)
-        ToyUtil.set_main_led(toy, 255, 255, 255, False)
-        ToyUtil.set_back_led_brightness(toy, 255)
+            toy.wake()
+            ToyUtil.set_robot_state_on_start(toy)
+            ToyUtil.set_main_led(toy, 255, 255, 255, False)
+            ToyUtil.set_back_led_brightness(toy, 255)
 
-        angle = 0
-        speed = 0
-        state = SpheroStateManager()
+            angle = 0
+            speed = 0
+            state = SpheroStateManager()
 
-        last_controll_time = time.time()
+            last_controll_time = time.time()
 
-        while True:
-            try:
-                if btns.btn_dash_pressed:
-                    speed = MAX_SPEED
-                else:
-                    speed = BASE_SPEED
-
-                if btns.btn_forward_pressed:
-                    (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.FORWARD)
-
-                    if acquire_controll and state_changed:
-                        last_controll_time = time.time()
-                        logger.debug(f"start {SpheroStates.FORWARD} ({speed})")
-                    ToyUtil.roll_start(toy, angle, speed)
-
-                if btns.btn_backward_pressed:
-                    (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.BACKWARD)
-
-                    if acquire_controll and state_changed:
-                        logger.debug(f"start {SpheroStates.BACKWARD} ({speed})")
-                        last_controll_time = time.time()
-                    ToyUtil.roll_start(toy, (angle+180)%360, speed)
-
-                if btns.btn_cw_pressed:
-                    (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.CW_ROTATE)
-
-                    if acquire_controll:
-                        if state_changed:
-                            logger.debug(f"start {SpheroStates.CW_ROTATE}")
-                            last_controll_time = time.time()
-                        angle += ANGULAR_SPEED
-                        angle %= 360
-                        ToyUtil.roll_start(toy, angle, 0)
-
-                if btns.btn_acw_pressed and state.acquire_controll(SpheroStates.ACW_ROTATE):
-                    (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.ACW_ROTATE)
-
-                    if acquire_controll:
-                        if state_changed:
-                            logger.debug(f"start {SpheroStates.ACW_ROTATE}")
-                            last_controll_time = time.time()
-                        angle -= ANGULAR_SPEED
-                        angle %= 360
-                        ToyUtil.roll_start(toy, angle, 0)
-
-
-                if not True in {btns.btn_forward_pressed, btns.btn_backward_pressed, btns.btn_cw_pressed, btns.btn_acw_pressed}:
-                    if state.state != SpheroStates.STOP:
-                        ToyUtil.roll_stop(toy, angle, False)
-                        prev_state = state.release_controll()
-                        logger.debug(f"stop {prev_state}")
-                        last_controll_time = time.time()
-
+            while True:
+                try:
+                    if btns.btn_dash_pressed:
+                        speed = MAX_SPEED
                     else:
-                        # STOP state
-                        pass
-                
-                if (time.time() - last_controll_time > 60):
-                    raise TimeoutError
-                
-                time.sleep(0.004)
+                        speed = BASE_SPEED
 
-            except Exception as e:
-                break
+                    if btns.btn_forward_pressed:
+                        (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.FORWARD)
 
-    logger.warning(f"{e}\nTerminated.")
-    display.display_terminated()
-    time.sleep(3)
+                        if acquire_controll and state_changed:
+                            last_controll_time = time.time()
+                            logger.debug(f"start {SpheroStates.FORWARD} ({speed})")
+                        ToyUtil.roll_start(toy, angle, speed)
+
+                    if btns.btn_backward_pressed:
+                        (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.BACKWARD)
+
+                        if acquire_controll and state_changed:
+                            logger.debug(f"start {SpheroStates.BACKWARD} ({speed})")
+                            last_controll_time = time.time()
+                        ToyUtil.roll_start(toy, (angle+180)%360, speed)
+
+                    if btns.btn_cw_pressed:
+                        (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.CW_ROTATE)
+
+                        if acquire_controll:
+                            if state_changed:
+                                logger.debug(f"start {SpheroStates.CW_ROTATE}")
+                                last_controll_time = time.time()
+                            angle += ANGULAR_SPEED
+                            angle %= 360
+                            ToyUtil.roll_start(toy, angle, 0)
+
+                    if btns.btn_acw_pressed and state.acquire_controll(SpheroStates.ACW_ROTATE):
+                        (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.ACW_ROTATE)
+
+                        if acquire_controll:
+                            if state_changed:
+                                logger.debug(f"start {SpheroStates.ACW_ROTATE}")
+                                last_controll_time = time.time()
+                            angle -= ANGULAR_SPEED
+                            angle %= 360
+                            ToyUtil.roll_start(toy, angle, 0)
+
+
+                    if not True in {btns.btn_forward_pressed, btns.btn_backward_pressed, btns.btn_cw_pressed, btns.btn_acw_pressed}:
+                        if state.state != SpheroStates.STOP:
+                            ToyUtil.roll_stop(toy, angle, False)
+                            prev_state = state.release_controll()
+                            logger.debug(f"stop {prev_state}")
+                            last_controll_time = time.time()
+
+                        else:
+                            # STOP state
+                            pass
+                    
+                    if (time.time() - last_controll_time > MAX_INTERVAL):
+                        raise TimeoutError
+                    
+                    time.sleep(0.004)
+
+                except Exception as e:
+                    logger.warning(f"{e}\nbreak loop..")
+                    break
+
+    except ToyNotFoundError as e:
+        logger.warning('Sphero not found.')
+        display.display_not_found()
+        time.sleep(3)
+
+    finally:
+        logger.warning(f"Terminated.")
+        display.display_terminated()
+        time.sleep(5)
 
 
 if __name__ == '__main__':

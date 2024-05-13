@@ -5,7 +5,7 @@ INSTALL_DIR="/opt/$SERVICE_NAME"
 
 # Install the required packages
 sudo apt-get update
-sudo apt-get install -y python3 python3-pip pigpio
+sudo apt-get install -y libopenjp2-7-dev python3 python3-pip pigpio
 if [ $? -ne 0 ]; then
     echo "Failed to install python3 and python3-pip"
     exit 1
@@ -49,13 +49,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# sudo raspi-config nonint enable_overlayfs 0
-# if [ $? -ne 0 ]; then
-#     echo "Failed to enable overlayfs"
-#     exit 1
-# else
-#     echo "File system will be read-only after reboot."
-# fi
+sudo raspi-config nonint enable_overlayfs 0
+if [ $? -ne 0 ]; then
+    echo "Failed to enable overlayfs"
+    exit 1
+else
+    echo "File system will be read-only after reboot."
+fi
 
 echo "Successfully installed the $SERVICE_NAME.service"
 echo "System will reboot in 5 seconds"
