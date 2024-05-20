@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# also,
+# add the following lines to /boot/config.txt
+# dtoverlay=pi3-disable-wifi
+# dtoverlay=dwc2
+#
+# add the following code after rootwait of /boot/cmdline.txt
+# modules-load=dwc2,g_ether
+
 SERVICE_NAME="sphero"
 INSTALL_DIR="/opt/$SERVICE_NAME"
 
@@ -12,7 +20,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Install the required python packages
-pip3 install --user --break-system-packages -r requirements.txt
+pip3 install -r requirements.txt
 if [ $? -ne 0 ]; then
     echo "Failed to install the required python packages"
     exit 1

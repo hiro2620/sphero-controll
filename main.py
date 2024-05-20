@@ -1,5 +1,5 @@
 from enum import Enum
-from logging import getLogger, basicConfig, INFO
+from logging import getLogger, basicConfig, INFO, DEBUG
 import subprocess
 import time
 
@@ -15,16 +15,23 @@ from PIL import ImageFont, Image, ImageDraw
 
 basicConfig(level=INFO)
 logger = getLogger(__name__)
+logger.setLevel(DEBUG)
 
 REMOTE_RASPBERRY_PI_ADDRESS = 'raspi.local' # デバッグ用
 
-BTN_FORWARD_PIN = 20 # 前進
-BTN_BACKWARD_PIN = 26 # 後退
-BTN_CW_ROTATE_PIN = 16 # 上から見て時計回り
-BTN_ACW_ROTATE_PIN = 21 # 上から見て反時計回り
-BTN_DASH = 6 # 加速
+BTN_FORWARD_PIN = 16 # 前進
+BTN_BACKWARD_PIN = 6 # 後退
+BTN_CW_ROTATE_PIN = 26 # 上から見て時計回り
+BTN_ACW_ROTATE_PIN = 24 # 上から見て反時計回り
+BTN_DASH = 22 # 加速
 
-BASE_SPEED = 80
+LED_FORWARD_PIN = 12
+LED_BACKWARD_PIN = 5
+LED_CW_ROTATE_PIN = 13
+LED_ACW_ROTATE_PIN = 23
+LED_DASH_PIN = 27
+
+BASE_SPEED = 120
 MAX_SPEED = 255
 ANGULAR_SPEED = 12
 
@@ -70,7 +77,7 @@ class SpheroStateManager():
         return prev
 
 
-class InputManager:
+class IOManager:
     def __init__(self, remote=False):
         if remote:
             self.__pi = pigpio.pi(REMOTE_RASPBERRY_PI_ADDRESS)
@@ -84,6 +91,13 @@ class InputManager:
         self.__pi.set_pull_up_down(BTN_BACKWARD_PIN, pigpio.PUD_UP)
         self.__pi.set_pull_up_down(BTN_CW_ROTATE_PIN, pigpio.PUD_UP)
         self.__pi.set_pull_up_down(BTN_ACW_ROTATE_PIN, pigpio.PUD_UP)
+        self.__pi.set_pull_up_down(BTN_DASH, pigpio.PUD_UP)
+        self.__pi.set_mode(LED_FORWARD_PIN, pigpio.OUTPUT)
+        self.__pi.set_mode(LED_BACKWARD_PIN, pigpio.OUTPUT)
+        self.__pi.set_mode(LED_CW_ROTATE_PIN, pigpio.OUTPUT)
+        self.__pi.set_mode(LED_ACW_ROTATE_PIN, pigpio.OUTPUT)
+        self.__pi.set_mode(LED_DASH_PIN, pigpio.OUTPUT)
+
     
     @property
     def btn_forward_pressed(self):
@@ -104,6 +118,9 @@ class InputManager:
     @property
     def btn_dash_pressed(self):
         return not self.__pi.read(BTN_DASH)
+    
+    def set_led(self, pin, value):
+        self.__pi.write(pin, value)
 
 
 class DisplayStates(Enum):
@@ -126,14 +143,18 @@ class DisplayManager:
 
 
     def __del__(self):
-        self.__oled.fill(0)
-        self.__oled.show()
+        self.clear()
 
 
     @staticmethod
     def get_undervoltage_state():
-        r = int(subprocess.run(['vcgencmd', 'get_throttled'], stdout=subprocess.PIPE).stdout.decode('utf-8')[12:-1], 16)
+        r = int(subprocess.run(['vcgencmd', 'get_throttled'], stdout=subprocess.PIPE).stdout.decode('utf-8')[12:], 16)
         return r & 0x50000 != 0
+
+
+    def clear(self):
+        self.__oled.fill(0)
+        self.__oled.show()
 
 
     def __draw_header(self, draw: ImageDraw):
@@ -187,7 +208,7 @@ class DisplayManager:
 
 def main():
     display = DisplayManager()
-    btns = InputManager()
+    interfaces = IOManager()
 
     logger.info('Start scanning...')
     display.display_scanning()
@@ -207,31 +228,48 @@ def main():
             state = SpheroStateManager()
 
             last_controll_time = time.time()
+            skip_press_continue = 0
+
+            interfaces.set_led(LED_FORWARD_PIN, 1)
+            interfaces.set_led(LED_BACKWARD_PIN, 1)
+            interfaces.set_led(LED_CW_ROTATE_PIN, 1)
+            interfaces.set_led(LED_ACW_ROTATE_PIN, 1)
+            interfaces.set_led(LED_DASH_PIN, 1)
 
             while True:
+                pressed = False
+                pressed_skip = True
                 try:
-                    if btns.btn_dash_pressed:
+                    if interfaces.btn_dash_pressed:
+                        pressed = True
                         speed = MAX_SPEED
                     else:
                         speed = BASE_SPEED
 
-                    if btns.btn_forward_pressed:
+                    if interfaces.btn_forward_pressed:
+                        pressed = True
                         (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.FORWARD)
 
                         if acquire_controll and state_changed:
                             last_controll_time = time.time()
                             logger.debug(f"start {SpheroStates.FORWARD} ({speed})")
                         ToyUtil.roll_start(toy, angle, speed)
+                    else:
+                        pressed_skip = False
 
-                    if btns.btn_backward_pressed:
+                    if interfaces.btn_backward_pressed:
+                        pressed = True
                         (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.BACKWARD)
 
                         if acquire_controll and state_changed:
                             logger.debug(f"start {SpheroStates.BACKWARD} ({speed})")
                             last_controll_time = time.time()
                         ToyUtil.roll_start(toy, (angle+180)%360, speed)
+                    else:
+                        pressed_skip = False
 
-                    if btns.btn_cw_pressed:
+                    if interfaces.btn_cw_pressed:
+                        pressed = True
                         (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.CW_ROTATE)
 
                         if acquire_controll:
@@ -242,7 +280,8 @@ def main():
                             angle %= 360
                             ToyUtil.roll_start(toy, angle, 0)
 
-                    if btns.btn_acw_pressed and state.acquire_controll(SpheroStates.ACW_ROTATE):
+                    if interfaces.btn_acw_pressed and state.acquire_controll(SpheroStates.ACW_ROTATE):
+                        pressed = True
                         (acquire_controll, state_changed) = state.acquire_controll(SpheroStates.ACW_ROTATE)
 
                         if acquire_controll:
@@ -252,9 +291,13 @@ def main():
                             angle -= ANGULAR_SPEED
                             angle %= 360
                             ToyUtil.roll_start(toy, angle, 0)
-
-
-                    if not True in {btns.btn_forward_pressed, btns.btn_backward_pressed, btns.btn_cw_pressed, btns.btn_acw_pressed}:
+                    
+                    if pressed_skip:
+                        skip_press_continue += 1
+                        if skip_press_continue > 100:
+                            break
+                    
+                    if not pressed:
                         if state.state != SpheroStates.STOP:
                             ToyUtil.roll_stop(toy, angle, False)
                             prev_state = state.release_controll()
